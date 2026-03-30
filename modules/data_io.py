@@ -55,6 +55,7 @@ def get_atlas14(gdf: gpd.GeoDataFrame, dur: str = '24-hr', out_dir: str = None) 
         out_dir = 'atlas14_data'
     os.makedirs(out_dir, exist_ok=True)
 
+    dur = dur+":"
 
     records = []
 
@@ -82,7 +83,6 @@ def get_atlas14(gdf: gpd.GeoDataFrame, dur: str = '24-hr', out_dir: str = None) 
             df = pd.read_csv(csv_path, header=11)
             df.set_index('by duration for ARI (years):', inplace=True)
 
-            dur = dur+":"
             data = df.loc[dur].copy() * 24
             data.index = pd.Index(['mean', 'upper', 'lower'], name='CI')
 
