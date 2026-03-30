@@ -3,15 +3,112 @@ Data I/O functions for MARISA IDF Analysis
 Functions for loading model data, processed datasets, and saving results
 """
 
+import time
 import xarray as xr
 import numpy as np
 import pandas as pd
+import geopandas as gpd
 import glob
 import os
 from typing import List, Optional, Union
 from .config import MODELS_LOCA2, MODELS_LOCA, MM_TO_INCHES, SECONDS_PER_DAY
 from modules import config
 
+
+def get_atlas14(gdf: gpd.GeoDataFrame, dur: str = '24-hr', out_dir: str = None) -> pd.DataFrame:
+    """
+    Download NOAA Atlas 14 24-hr precipitation frequency estimates for each
+    county in a GeoDataFrame and return a DataFrame with mean, upper,
+    and lower confidence intervals.
+
+    Parameters
+    ----------
+    gdf : gpd.GeoDataFrame
+        GeoDataFrame of counties. Expected columns: 'NAME', 'STATE', 'FIPS'.
+        Geometry must be in a CRS that supports .centroid (e.g. EPSG:4326).
+    out_dir : str, optional
+        Directory to save downloaded CSV files. If None, uses 'atlas14_cache' in current working directory.
+
+    Returns
+    -------
+    pd.DataFrame
+        Long-format DataFrame indexed by (county_name, CI) where CI is one of
+        ['mean', 'upper', 'lower']. Columns are ARI return periods (years).
+        Intensity values are in inches/day 
+
+    Notes
+    -----
+    Uses pfdf's atlas14.download()
+    pfdf Atlas 14 API docs:
+        https://ghsc.code-pages.usgs.gov/lhp/pfdf/api/data/noaa/atlas14.html
+
+    Downloads are cached to a local directory to avoid redundant requests.
+    A 1-second sleep is added between requests
+    """
+    # !pip install pfdf -i https://code.usgs.gov/api/v4/groups/859/-/packages/pypi/simple
+    import pfdf
+    from pfdf.data.noaa import atlas14
+
+    ##########
+
+    if out_dir is None:
+        out_dir = 'atlas14_data'
+    os.makedirs(out_dir, exist_ok=True)
+
+
+    records = []
+
+    for idx, county in gdf.iterrows():
+        try:
+            centroid = county.geometry.centroid
+            lon, lat = centroid.x, centroid.y
+
+            county_name = county.get('NAME')
+            state_name = county.get('STATE')
+            county_fips = county.get('FIPS', None)
+
+            csv_path = atlas14.download(
+                lat=lat,
+                lon=lon,
+                series='pds',
+                statistic='all',
+                data='intensity',
+                units='english',
+                parent=out_dir,
+                name=f"{county_name}_{state_name}_{idx}.csv",
+                overwrite=False
+            )
+
+            df = pd.read_csv(csv_path, header=11)
+            df.set_index('by duration for ARI (years):', inplace=True)
+
+            dur = dur+":"
+            data = df.loc[dur].copy() * 24
+            data.index = pd.Index(['mean', 'upper', 'lower'], name='CI')
+
+            data['county_name'] = county_name
+            data['county_fips'] = county_fips
+            data['lon'] = lon
+            data['lat'] = lat
+
+            records.append(data)
+            print(f"Downloaded {county_name}: extracted {len(data)} {dur[:-1]} records")
+            time.sleep(1)
+
+        except Exception as e:
+            print(f"Error for county {county.get('NAME', idx)}: {e}")
+            continue
+
+    if not records:
+        raise ValueError("No Atlas 14 data was successfully retrieved.")
+
+    result = (
+        pd.concat(records)
+        .reset_index()
+        .set_index(['county_name', 'CI'])
+    )
+
+    return result
 
 def load_loca_precipitation(
     ds: xr.Dataset,
