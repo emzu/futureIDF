@@ -344,147 +344,336 @@ def process_precipitation_timeseries(
 import numpy as np
 from scipy.stats import genextreme
 from scipy.optimize import minimize
+from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
-
-import numpy as np
 import xarray as xr
 import zarr
 import rasterio
 import rioxarray
 from scipy.stats import bernoulli, gamma
 from rasterio import features
-import matplotlib.pyplot as plt
-
 import pandas as pd
 import geopandas as gpd
-
-import xarray as xr
-from scipy.interpolate import interp1d
-from scipy.interpolate import PchipInterpolator
-
-def fit_gev_atlas14(T, x, verbose = False):
+ 
+ 
+# ---------------------------------------------------------------------------
+# Atlas-14 Return Periods (standard)
+# ---------------------------------------------------------------------------
+ATLAS14_RETURN_PERIODS = np.array([2, 5, 10, 25, 50, 100, 200, 500])
+ 
+ 
+# ---------------------------------------------------------------------------
+# GEV Fitting
+# ---------------------------------------------------------------------------
+ 
+def fit_gev_atlas14(T, x, verbose=False):
     """
     Fit a GEV to (T, x) pairs where x is intensity at return period T.
-    T: array-like of return periods (years). Must be > 1 typically.
-    x: array-like of intensities (same length).
-    weights: optional array-like of same length to weight squared errors.
-    Returns a dict with fitted params and helper functions.
+ 
+    Parameters
+    ----------
+    T : array-like
+        Return periods (years). Must be > 1.
+    x : array-like
+        Intensities (same length as T).
+    verbose : bool
+        If True, print optimization warnings.
+ 
+    Returns
+    -------
+    c_hat, loc_hat, scale_hat : float
+        Fitted GEV shape, location, and scale parameters.
     """
     T = np.asarray(T, dtype=float)
     x = np.asarray(x, dtype=float)
     if T.shape != x.shape:
-        raise ValueError("T and x must have same shape")
-    # Non-exceedance probability
-    p = 1.0-1.0/T
-    # Avoid exactly 0 or 1 (numerical)
-    eps = 1e-10
-    p = np.clip(p, eps, 1 - eps)
-
-    # objective: sum of weighted squared differences between model CDF(x) and empirical p
+        raise ValueError("T and x must have the same shape")
+ 
+    p = np.clip(1.0 - 1.0 / T, 1e-10, 1 - 1e-10)
+ 
     def obj(params):
         c, loc, scale = params
         try:
-            model_p = genextreme.cdf(x, c, loc=loc, scale=scale)
             model_pred = genextreme.ppf(p, c, loc=loc, scale=scale)
         except Exception:
             return 1e8
-        #resid = np.log(model_p) - np.log(p)
-        resid = model_pred - x
-
-        return np.sum(resid**2)
-
-    # initial guesses
+        return np.sum((model_pred - x) ** 2)
+ 
     loc0 = np.median(x)
-    scale0 = np.std(x, ddof=1) if np.std(x, ddof=1) > 0 else max(1.0, 0.01*abs(loc0))
-    c0 = -0.2
-    x0 = np.array([c0, loc0, scale0])
-
-    bounds = [(-2.0, 2.0), (None, None), (0, None)]  # keep shape within reasonable range, scale>0
-    res = minimize(obj, x0, method='L-BFGS-B', bounds=bounds)
-
-    if not res.success:
-        if verbose:
-            print("Optimization warning:", res.message)
-
-    c_hat, loc_hat, scale_hat = res.x
-
-    return c_hat, loc_hat, scale_hat
-
-def process_inversion(zarr_adjFact, a14, design_adjFactors, step_up=False):
-
-  ### HELPER FUNCTIONS ###
+    scale0 = np.std(x, ddof=1) if np.std(x, ddof=1) > 0 else max(1.0, 0.01 * abs(loc0))
+    x0 = np.array([-0.2, loc0, scale0])
+    bounds = [(-2.0, 2.0), (None, None), (0, None)]
+ 
+    res = minimize(obj, x0, method="L-BFGS-B", bounds=bounds)
+    if not res.success and verbose:
+        print("Optimization warning:", res.message)
+ 
+    return tuple(res.x)
+ 
+ 
+# ---------------------------------------------------------------------------
+# Atlas-14 CDF Interpolator (shared helper)
+# ---------------------------------------------------------------------------
+ 
+def _build_atlas14_cdf_interp(a14):
+    """
+    Build a cubic interpolator mapping intensity → non-exceedance probability
+    for a single Atlas-14 intensity vector.
+ 
+    Parameters
+    ----------
+    a14 : array-like, shape (n_rp,)
+        Atlas-14 intensities at ATLAS14_RETURN_PERIODS[:n_rp].
+ 
+    Returns
+    -------
+    a14_intensity : np.ndarray
+        Intensities corresponding to each standard return period.
+    cdf_interp : callable
+        Interpolator: intensity → non-exceedance probability ∈ [0, 1].
+    """
+    a14_intensity = np.asarray(a14, dtype=float)
+    n = len(a14_intensity)
+    T = ATLAS14_RETURN_PERIODS[:n]
+    p = 1.0 - 1.0 / T
+ 
+    cdf_interp = interp1d(
+        a14_intensity, p,
+        kind="cubic",
+        bounds_error=False,
+        fill_value=(0.0, 1.0),
+    )
+    return a14_intensity, cdf_interp
+ 
+ 
+# ---------------------------------------------------------------------------
+# Design Depth Builder
+# ---------------------------------------------------------------------------
+ 
+def build_design_depths(
+    a14,
+    mode="change_factor",
+    change_factors=None,
+    ci_upper=None,
+    n_rp=None,
+):
+    """
+    Construct a design-depth array for use in inversion.
+ 
+    One design depth is produced per return period so that the resulting array
+    can be passed directly to ``process_inversion``.
+ 
+    Parameters
+    ----------
+    a14 : array-like, shape (n_rp,)
+        Atlas-14 mean intensities at the standard return periods.
+    mode : {"change_factor", "step_up", "upper_ci"}
+        Strategy for deriving design depths:
+ 
+        ``"change_factor"``
+            Scale each Atlas-14 intensity by the corresponding entry in
+            *change_factors*.  ``change_factors`` must be provided.
+ 
+        ``"step_up"``
+            Shift each return-period position one step to the right on the
+            Atlas-14 curve (i.e., the design depth for the 2-yr event becomes
+            the current 5-yr intensity, etc.).  The last return period is
+            extrapolated by applying the ratio of the last two Atlas-14 values.
+ 
+        ``"upper_ci"``
+            Use the Atlas-14 upper confidence-interval values supplied in
+            *ci_upper* as the design depths.  ``ci_upper`` must be provided and
+            must have the same length as *a14*.
+ 
+    change_factors : array-like, shape (n_rp,), optional
+        Required when ``mode="change_factor"``.  Multiplicative adjustment
+        factors applied element-wise to *a14*.
+    ci_upper : array-like, shape (n_rp,), optional
+        Required when ``mode="upper_ci"``.  Atlas-14 upper CI intensities.
+    n_rp : int, optional
+        Truncate output to the first *n_rp* return periods.  Defaults to
+        ``len(a14)``.
+ 
+    Returns
+    -------
+    design_depths : np.ndarray, shape (n_rp,)
+        One design depth per return period, sorted ascending.
+ 
+    Examples
+    --------
+    >>> a14 = [0.5, 0.8, 1.0, 1.3, 1.5, 1.8, 2.1, 2.5]
+    >>> cf  = [1.0, 1.05, 1.1, 1.1, 1.15, 1.2, 1.2, 1.25]
+    >>> build_design_depths(a14, mode="change_factor", change_factors=cf)
+    """
+    a14 = np.asarray(a14, dtype=float)
+    n = n_rp if n_rp is not None else len(a14)
+ 
+    if mode == "change_factor":
+        if change_factors is None:
+            raise ValueError("change_factors must be provided when mode='change_factor'")
+        cf = np.asarray(change_factors, dtype=float)
+        if cf.shape[0] < n:
+            raise ValueError(
+                f"change_factors has {cf.shape[0]} entries but n_rp={n} was requested"
+            )
+        design_depths = cf[:n] * a14[:n]
+ 
+    elif mode == "step_up":
+        # Shift one position to the right; extrapolate the last entry.
+        stepped = np.empty(n, dtype=float)
+        # For positions 0 … n-2, take the next Atlas-14 value
+        available = min(n, len(a14) - 1)
+        stepped[:available] = a14[1 : available + 1]
+        # Extrapolate beyond the available Atlas-14 range using the last ratio
+        if available < n:
+            ratio = a14[-1] / a14[-2] if a14[-2] != 0 else 1.0
+            for i in range(available, n):
+                stepped[i] = stepped[i - 1] * ratio
+        design_depths = stepped
+ 
+    elif mode == "upper_ci":
+        if ci_upper is None:
+            raise ValueError("ci_upper must be provided when mode='upper_ci'")
+        ci = np.asarray(ci_upper, dtype=float)
+        if len(ci) < n:
+            raise ValueError(
+                f"ci_upper has {len(ci)} entries but n_rp={n} was requested"
+            )
+        design_depths = ci[:n]
+ 
+    else:
+        raise ValueError(f"Unknown mode '{mode}'. Choose from: change_factor, step_up, upper_ci")
+ 
+    return np.sort(design_depths)
+ 
+ 
+# ---------------------------------------------------------------------------
+# Core Inversion
+# ---------------------------------------------------------------------------
+ 
+def process_inversion(zarr_adjFact, a14, design_depths):
+    """
+    Invert adjustment factors to compute annual exceedance probabilities for
+    each design depth at each county grid cell.
+ 
+    For a given climate-model adjustment factor *f* at return period *T*, the
+    future intensity at *T* is ``f * I_atlas14(T)``.  Given a target design
+    depth *d*, the inverted return period is found by asking: "at what
+    non-exceedance probability does the *current* Atlas-14 CDF equal
+    ``d / f``?"  This is the probability that the *future* distribution
+    exceeds *d*.
+ 
+    Parameters
+    ----------
+    zarr_adjFact : xr.DataArray
+        Adjustment factors with a ``return_periods`` dimension, shape
+        (n_rp, [spatial dims…]).  Values are dimensionless multipliers
+        (e.g. 1.15 = 15 % increase).
+    a14 : array-like, shape (n_rp,)
+        Atlas-14 mean intensities at the standard return periods, ordered to
+        match ``zarr_adjFact.return_periods``.
+    design_depths : array-like, shape (n_design,)
+        Target design depths for which to compute exceedance probabilities.
+        Typically produced by :func:`build_design_depths`.
+ 
+    Returns
+    -------
+    values : list of np.ndarray
+        One array per design depth (in the same order as *design_depths*),
+        each containing the annual exceedance probabilities across all spatial
+        units in *zarr_adjFact*.
+    """
+    design_depths = np.asarray(design_depths, dtype=float)
+    a14_intensity, cdf_interp = _build_atlas14_cdf_interp(a14)
+ 
+    # Align Atlas-14 intensities to the return periods present in zarr_adjFact
+    n_rp = zarr_adjFact.return_periods.shape[0]
+    a14_aligned = a14_intensity[:n_rp]
+ 
+    # Adjusted (future) intensities: shape (n_rp, [spatial dims…])
+    zarr_intensity = zarr_adjFact * a14_aligned
+ 
+    zarr_adjFact_ds = xr.Dataset({"adjFact": zarr_adjFact}).chunk(dict(return_periods=-1))
+ 
     def invert_adjFact(rp, adjFactor, new_intensity):
-
-        inv_rp = cdf_interp((1/adjFactor)*new_intensity)
-
+        """Scalar ufunc: given adjFactor vector and design depth, return exceedance prob."""
+        inv_rp = cdf_interp((1.0 / adjFactor) * new_intensity)
         return inv_rp
-
-    def interp_atlas14(a14_local):
-        from scipy.interpolate import interp1d
-
-        a14_const = xr.DataArray(
-                a14_local,
-                dims="return_periods",
-                coords={"return_periods": [2, 5, 10, 25, 50, 100, 200, 500]}
-                )
-        #Fit GEV
-        T = np.array(a14_const.return_periods.values.astype(int))
-        x = np.array(a14_local)  # intensities
-
-        # Create interpolation function
-        cdf_interp = interp1d(x, 1-1/T,
-                                kind='cubic',  # or 'cubic' for smoother
-                                bounds_error=False,
-                                fill_value=(0, 1))
-        return x, cdf_interp
-
-    ### Interpolate Atlas 14 Data ###
-    a14_intensity, cdf_interp = interp_atlas14(a14)
-
-    ### Adjusted Intensity ###
-    zarr_intensity = zarr_adjFact*a14_intensity[:zarr_adjFact.return_periods.shape[0]]
-    zarr_intensity = xr.Dataset({"intensity": zarr_intensity})
-    zarr_intensity = zarr_intensity.chunk(dict(return_periods=-1))
-
-    zarr_adjFact = xr.Dataset({"adjFact": zarr_adjFact})
-    zarr_adjFact = zarr_adjFact.chunk(dict(return_periods=-1))
-
-    ### Design Intensity ###
-    new_intensity = design_adjFactors*a14_intensity[:design_adjFactors.shape[0]]
-    new_intensity = np.sort(new_intensity)
-    if step_up:
-        new_intensity = a14_intensity[1:]
-        new_intensity = new_intensity[:6]
-
-    rp_vals = zarr_adjFact["return_periods"].values
+ 
     inverted = xr.apply_ufunc(
         invert_adjFact,
-        zarr_adjFact["return_periods"],
-        zarr_adjFact["adjFact"],
-        new_intensity,
+        zarr_adjFact_ds["return_periods"],
+        zarr_adjFact_ds["adjFact"],
+        design_depths,
         input_core_dims=[["return_periods"], ["return_periods"], ["new_intensity"]],
         output_core_dims=[["new_intensity"]],
         vectorize=True,
         dask="parallelized",
-        output_dtypes=[float]
+        output_dtypes=[float],
     )
-
-    inverted_ds = inverted.to_dataset(name='exceedance_probability')
-    inverted_ds = inverted_ds.assign(new_intensity=new_intensity)
-
-    inverted = inverted_ds['exceedance_probability']
-    frequencies = inverted.new_intensity.values
-    #Annual exceedance probability
-    data = {f: 1-(((inverted.sel(new_intensity = f, method = 'nearest').values.flatten()))) for f in frequencies}
-
-    ### Clean Data ###
-    depths = []
-    values = []
-    for k, v in data.items():
+ 
+    inverted_ds = inverted.to_dataset(name="exceedance_probability")
+    inverted_ds = inverted_ds.assign(new_intensity=design_depths)
+    inverted = inverted_ds["exceedance_probability"]
+ 
+    # Convert non-exceedance → annual exceedance probability, drop non-finite
+    data = {
+        f: 1.0 - inverted.sel(new_intensity=f, method="nearest").values.flatten()
+        for f in design_depths
+    }
+ 
+    depths, values = [], []
+    for depth, v in data.items():
         v = np.asarray(v)
-        v_clean = v[np.isfinite(v)]        # drop NaN, inf, -inf
-        if len(v_clean) > 0:               # only keep if not empty
-            depths.append(k)
+        v_clean = v[np.isfinite(v)]
+        if len(v_clean) > 0:
+            depths.append(depth)
             values.append(v_clean)
-
-    return values
+ 
+    return pd.Series([v[0] for v in values], index=depths)
+ 
+ 
+# ---------------------------------------------------------------------------
+# Convenience wrapper (county-level entry point)
+# ---------------------------------------------------------------------------
+ 
+def compute_county_exceedance(
+    zarr_adjFact,
+    a14,
+    mode="change_factor",
+    change_factors=None,
+    ci_upper=None,
+    n_rp=None,
+):
+    """
+    Parameters
+    ----------
+    zarr_adjFact : xr.DataArray
+        Adjustment factors with a ``return_periods`` dimension.
+    a14 : array-like
+        Atlas-14 mean depths
+    mode : str
+        Passed to :func:`build_design_depths`.
+    change_factors : array-like, optional
+        Passed to :func:`build_design_depths` when ``mode="change_factor"``.
+    ci_upper : array-like, optional
+        Passed to :func:`build_design_depths` when ``mode="upper_ci"``.
+    n_rp : int, optional
+        Number of return periods to use.  Defaults to ``len(a14)``.
+ 
+    Returns
+    -------
+    design_depths : np.ndarray
+        The design depths used.
+    values : list of np.ndarray
+        Exceedance probabilities per design depth (see :func:`process_inversion`).
+    """
+    design_depths = build_design_depths(
+        a14,
+        mode=mode,
+        change_factors=change_factors,
+        ci_upper=ci_upper,
+        n_rp=n_rp,
+    )
+    values = process_inversion(zarr_adjFact, a14, design_depths)
+    return design_depths, values
