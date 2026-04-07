@@ -22,74 +22,269 @@ from shapely.geometry import mapping
 
 from typing import Optional, Literal, Union
 
-def fit_gev_lmom_fixed_shape(data, shape, scale):
-    from scipy.special import gamma
-    import numpy as np
-    """
-    Fit GEV location and scale via L-moments with fixed shape, scale parameter.
-    Uses Hosking (1990) parameterization.
-    Note: scipy uses c = -xi convention, this uses xi directly.
-    """
-    data = np.asarray(data, dtype=float)
-    data = data[np.isfinite(data)]
-    
+### Main function to calculate adjustment factors and return period values for a given model, scenario, and time period ###
+def calc_adj_factors(model, scenario, subset_time, DIRECTORY, n_b = 100, s_var = 'pds_peak_values', regionalization = True):
+  period = f"{str(subset_time[0])}-{str(subset_time[1])}"
 
-    # L-moments based estimation of location given fixed scale and shape
-    # For GEV: lambda1 = mu + sigma * (Gamma(1-xi) - 1) / xi  (xi != 0)
-    #          lambda1 = mu + sigma * euler_mascheroni           (xi == 0)
-    if np.abs(shape) < 1e-8:
-        euler = 0.5772156649015329
-        loc = np.mean(data) - scale * euler  # approximate using sample mean as lambda1
-    else:
-        lmom1 = np.mean(data)  # first L-moment = mean
-        gamma_term = gamma(1 - shape) if abs(shape) < 1 else float('nan')
-        loc = lmom1 - scale * (gamma_term - 1) / shape
-   
-    return loc, scale, shape
+  result_hist = xr.open_dataset(f'{DIRECTORY}/{model}.historical.{str(1950)}-{str(2000)}_processed.zarr', zarr_format=2, consolidated=False)
+  dims_stack = [d for d in result_hist.dims if d not in ['x', 'y', 'year']]
+  
+  if regionalization:
+    #r_hist, gev_paras_log_hist = lmoments_county(result_hist[s_var])
+    r_hist, gev_paras_log_hist = calc_adj_factors_centroid(result_hist, s_var, n_b = n_b)
+  else:
+    r_hist, gev_paras_log_hist = process_rp_values(result_hist[s_var], dims_stack = dims_stack)
 
-def county_gevShape(ds, gdf_counties):
-    # Fit a shape parameter for each grid cell, then aggregate by county (e.g., mean or median) to get a representative shape parameter for each county
-    
-    #Fit shape parameter for each grid cell
+
+  result = xr.open_dataset(f'{DIRECTORY}/{model}.{scenario}.{str(subset_time[0])}-{str(subset_time[1])}_processed.zarr', zarr_format=2, consolidated=False)
+  dims_stack = [d for d in result.dims if d not in ['x', 'y', 'year']]
+  if regionalization:
+    r_mod, gev_paras_log_mod = calc_adj_factors_centroid(result, s_var, n_b = n_b)
+  else:
+    r_mod, gev_paras_log_mod = process_rp_values(result[s_var], dims_stack = dims_stack)
+
+  r = r_mod/r_hist
+
+  r = r.expand_dims({'model': [model], 'scenario': [scenario], 'time_period' : [period]})
+  r_mod = r_mod.expand_dims({'model': [model], 'scenario': [scenario], 'time_period' : [period]})
+  gev_mod = gev_paras_log_mod.expand_dims({'model': [model], 'scenario': [scenario], 'time_period' : [period]})
+
+  r.name = 'adj_factor'
+  r_mod.name = 'return_precip'
+  gev_mod.name = 'GEV_parameters'
+  return r, r_mod, gev_mod
+def calc_adj_factors_centroid(ds, var_name, n_b, lat_dim='lat', lon_dim='lon', fit_type = 'regional_lmom'):
+    from pathlib import Path
+    import lmoments3 as lm
+    from lmoments3 import distr
+    import regionmask
+    import geopandas as gpd
+
+    def county_centroid_gdf():
+      #Load Counties
+      gdf_counties = data_io.load_counties()
+      #Calculate centroids
+
+      gdf_projected = gdf_counties.to_crs("EPSG:5070")  # Project to a metric CRS for accurate distance calculations
+      centroids = gdf_projected.geometry.centroid  # GeoSeries in EPSG:5070
+      gdf_counties['centroid'] = gpd.GeoSeries(centroids, crs="EPSG:5070").to_crs("EPSG:4326")
+
+      return gdf_counties
+
+    def gdf_xarray(gdf):
+
+      county_ids = gdf.index.astype(str) 
+      centroids = gdf['centroid']
+      ds = xr.Dataset(
+          coords={
+              "county": county_ids,
+              "lat": ("county", centroids.y.values),
+              "lon": ("county", centroids.x.values),
+          }
+      )
+
+      # Attach geometry as a non-index coordinate for reference
+      ds = ds.assign_coords(geometry=("county", gdf.geometry.values))
+      return ds
+
     def fit_gev_shape_scale(data):
-        try:
-            fit_paras = distr.gev.lmom_fit(data)
-            shape = fit_paras['shape']
-            scale = fit_paras['scale']
-        except:
-            shape = np.nan
-            scale = np.nan
-        return shape, scale
+      """
+      Fit a GEV distribution to the data using L-moments 
+      return: shape and scale parameters 
+      """
+      try:
+          fit_paras = distr.gev.lmom_fit(data)
+          shape = -fit_paras['c']
+          scale = fit_paras['scale']
+      except:
+          shape = np.nan
+          scale = np.nan
+      return shape, scale
     
-    da_shape = xr.apply_ufunc(
-        fit_gev_shape, 
-        ds, 
-        input_core_dims=[['time']], 
-        output_core_dims=[[]],
-        output_dtypes=[np.float64], 
-        exclude_dims={'time'}, 
-        vectorize=True, 
-        dask="parallelized"
-    )
-    # Create mask
-    mask = regionmask.mask_geopandas(
-        gdf_counties,
-        lon_or_obj=ds.x,
-        lat=ds.y
-    )
+    def safe_lmom(x):
+      """
+      Compute L-moments for a given array, handling missing values.
+      """
+      x_valid = x[np.isfinite(x)]
+      try:
+          return np.array(lm.lmom_ratios(x_valid, nmom=4))
+      except Exception:
+          return np.full(4, np.nan)
+                    
+    def extract_7x7(da_gridded, lons, lats):
+      """
+      Extract 7x7 windows around each county centroid.
+      da_gridded: (y, x) or (ensemble, peak, y, x)
+      lons, lats: (county,)
+      returns: (county, ensemble, peak, cell) or (county, peak, cell) where cell is the flattened 7x7 window
+      """
+      half = 3
+      windows = []
+      
+      for county_id, lon, lat in zip(ds_county['county'].values, lons, lats):
+          i_lat = np.abs(da_gridded.y - lat).argmin().item()
+          i_lon = np.abs(da_gridded.x - lon).argmin().item()
+          
+          y_start = max(0, i_lat - half)
+          y_stop  = min(da_gridded.sizes['y'], i_lat + half + 1)
+          x_start = max(0, i_lon - half)
+          x_stop  = min(da_gridded.sizes['x'], i_lon + half + 1)
+          
+          window = da_gridded.isel(
+              y=slice(y_start, y_stop),
+              x=slice(x_start, x_stop),
+          )
+          window = window.pad(
+              y=(max(0, half - i_lat), max(0, (i_lat + half + 1) - da_gridded.sizes['y'])),
+              x=(max(0, half - i_lon), max(0, (i_lon + half + 1) - da_gridded.sizes['x'])),
+              mode='constant', constant_values=np.nan
+          )
+          if 'ensemble' in da_gridded.dims:
+              window = window.transpose('ensemble', 'peak', 'y', 'x')  # ensure correct order
+          else:
+              window = window.transpose('peak', 'y', 'x')  # ensure correct order
+          values = window.values                                     # (ensemble, peak, 7, 7)
+          values_flat = values.reshape(*values.shape[:-2], -1)      # (ensemble, peak, 49)
+          windows.append(values_flat)
+      
+      if 'ensemble' in da_gridded.dims:
+        return xr.DataArray(
+          np.stack(windows, axis=0),
+          dims=['county', 'ensemble', 'peak', 'cell'],
+          coords={'county': ds_county['county'].values}
+      )
+      else:
+        return xr.DataArray(
+          np.stack(windows, axis=0),
+          dims=['county', 'peak', 'cell'],
+          coords={'county': ds_county['county'].values}
+      )
+    def fit_gev_grid(lmoms_4d):
+      """
+      Fit GEV to each cell in a 5x5 grid from pre-computed L-moments.
+      lmoms_4d: (4, 5, 5) where dim 0 is [L1, L2, t3, t4]
+      returns: c, loc, scale each (5, 5)
+      """
+      ny, nx = lmoms_4d.shape[1], lmoms_4d.shape[2]
+      c_out     = np.full((ny, nx), np.nan)
+      loc_out   = np.full((ny, nx), np.nan)
+      scale_out = np.full((ny, nx), np.nan)
 
-    da_stacked = da_shape.stack(location=['y', 'x'])
-    mask_stacked = mask.stack(location=['y', 'x'])
+      for i in range(ny):
+          for j in range(nx):
+              lmoms = lmoms_4d[:, i, j]
+              if not np.isfinite(lmoms).all():
+                  continue
+              try:
+                  paras = distr.gev.lmom_fit(lmom_ratios=lmoms.tolist())
+                  c_out[i, j]     = paras['c']
+                  loc_out[i, j]   = paras['loc']
+                  scale_out[i, j] = paras['scale']
+              except:
+                  pass
 
-    # Group by county and aggregate (e.g., mean, median, or concatenate all values)
-    if 'ensemble' in ds.dims:
-      da_by_county = da_stacked.groupby(mask_stacked.rename('county')).median(dim = ['location', 'ensemble'])
+      return c_out, loc_out, scale_out
+
+    def ds_5x5_lmom(data, n_b=100):
+      """
+      input:
+      data: 7x7 grid of data around each county centroid (ensemble, peak, 49) or (peak, 49) 
+      n_b: number of bootstrap iterations
+
+      computes L-moments for the 5x5 grid around the focal cell, 
+      fits a GEV distribution to those moments, 
+      bootstraps return period thresholds from that fitted distribution. 
+
+      return:
+      r_out: (9, n_b+1, n_return_periods) return period thresholds for each of the 9 cells in the 3x3 grid around the centroid (including the centroid itself)
+      p_out: (9, n_b+1, 3) GEV parameters (shape, loc, scale) for each of the 9 cells in the 3x3 grid around the centroid (including the centroid itself)) for each bootstrap iteration
+      """
+
+      # Flatten ensemble and peak into single time axis
+      data = data.reshape(-1, data.shape[-1])  # (ensemble*peak, 49)
+      data_2d = data.reshape(data.shape[0], 7, 7)  # (time, 7, 7)
+
+      all_r, all_params = [], []
+      #For each cell in a 3x3 (for smoothing at the end)
+      for i in range(2, 5):
+          for j in range(2, 5):
+              focal_cell = data_2d[:, i, j]               # (time,)
+              pool = data_2d[:, i-2:i+3, j-2:j+3]        # (time, 5, 5)
+
+              if fit_type == "regional_lmom":
+                #Regional L-moments: Compute L-moments for the 5x5 grid around the focal cell and fit a GEV to those moments
+                pool = data_2d[:, i-2:i+3, j-2:j+3]             # (time, 5, 5)
+                data_flat = pool.reshape(pool.shape[0], -1)       # (time, 25)
+                #Compute L-Moments for each cell in the 5x5 grid
+                lmoms = np.apply_along_axis(safe_lmom, axis=0, arr=data_flat)  # (4, 25)
+                #Smoothing: Handle any NaN values in L-moments by replacing them with the mean of the non-NaN values across the grid 
+                lmoms[0] = lmoms[0][np.isnan(lmoms[0])] = np.nanmean(lmoms[0])
+                lmoms[1] = lmoms[1][np.isnan(lmoms[1])] = np.nanmean(lmoms[1])
+                #Smooth higher order moments (mean across grid) to ensure stable fitting even if some cells have extreme values or insufficient data
+                lmoms[2] = np.ones(lmoms[2].shape)*np.nanmean(lmoms[2])
+                lmoms[3] = np.ones(lmoms[3].shape)*np.nanmean(lmoms[3])
+
+                lmoms_4d = lmoms.reshape(4, 5, 5)
+                shape_grid, loc_grid, scale_grid = fit_gev_grid(lmoms_4d)
+
+              elif fit_type == "regional_stack":
+                #Stack all values in the 5x5 grid to fit a single GEV (Increases sample size for fitting, but assumes all cells are from the same distribution, ignores spatial dependence, leads to overconfident estimates)
+                pool = pool.reshape(-1)       # (time, 25)
+                valid = np.isfinite(pool)       # (25,)
+                pool = pool[valid]                        # (time, n_valid)
+                shape, scale = fit_gev_shape_scale(pool)     
+              
+              #Baseline GEV parameters for bootstrapping (use focal cell parameters if regional stack, or 3x3 smoothed parameters if regional_lmom)
+              fit_paras_base = {'c': shape_grid[2,2], 'loc': loc_grid[2,2], 'scale': scale_grid[2,2]}
+              # Bootstap return period thresholds, GEV parameters from the baseline GEV distribution
+              r, gev_params = bootstrap_gev(n_b, fit_paras_base, num_years=50)
+              all_r.append(np.asarray(r))
+              all_params.append(np.asarray(gev_params))
+      r_out = np.stack(all_r, axis=0)        # (9, n_b+1, n_return_periods)
+      p_out = np.stack(all_params, axis=0)   # (9, n_b+1, 3)
+      return r_out, p_out
+    
+    ds_county = gdf_xarray(county_centroid_gdf())
+        
+    da_gridded = ds[var_name] if isinstance(ds, xr.Dataset) else ds
+
+    da_pooled = extract_7x7(da_gridded, ds_county['lon'].values, ds_county['lat'].values)
+
+    if 'ensemble' in da_pooled.dims:
+      in_dims = ['ensemble', 'peak', 'cell']
     else:
-      da_by_county = da_stacked.groupby(mask_stacked.rename('county')).median(dim = 'location')
-    
-    return da_by_county
+      in_dims = ['peak', 'cell']
+
+    r, gev_params = xr.apply_ufunc(
+      ds_5x5_lmom,
+      da_pooled,
+      kwargs={"n_b": n_b},
+      input_core_dims=[in_dims],
+      output_core_dims=[['centroid_cell', 'n_b', 'return_periods'], 
+                        ['centroid_cell', 'n_b', 'GEV_paras']],
+      output_dtypes=[np.float64, np.float64],
+      vectorize=True,
+      dask="parallelized",
+      dask_gufunc_kwargs={'output_sizes': {
+          'return_periods': 6, 
+          'n_b': n_b+1, 
+          'GEV_paras': 3,
+          'centroid_cell': 9
+      }}
+      )
+
+      
+
+    gev_params = gev_params.assign_coords(GEV_paras = ['shape', 'loc', 'scale']) 
+    r = r.assign_coords(return_periods = [2, 5, 10, 25, 50, 100]) 
+
+    return r, gev_params
 
 def county_centroid(ds, gdf_counties):
+  """
+  Assigns each county the grid cell closest to its centroid as its representative location for GEV fitting and return period calculation. 
+
+  """
   import numpy as np
   from scipy.spatial import cKDTree
 
@@ -132,6 +327,17 @@ def thin_grid(ds, dist = 50):
 
 def bootstrap_gev(n_b, fit_paras_base, num_years = 50, return_periods = config.RETURN_PERIODS):
   #From a baseline GEV, resample w/t data length
+  """
+  input:
+  n_b: number of bootstrap iterations
+  fit_paras_base: parameters of the baseline GEV distribution to resample from
+  num_years: length of the data record to resample (e.g., 50 years)
+  return_periods: list of return periods to calculate thresholds for
+  
+  returns: 
+  thresholds_cp (n_b+1, n_return_periods)
+  parameters_cp (n_b+1, 3)
+  """
   
   thresholds_cp = np.zeros([(n_b+1), len(return_periods)])
   parameters_cp = np.zeros([(n_b+1), 3])
@@ -173,6 +379,7 @@ def bootstrap_gev(n_b, fit_paras_base, num_years = 50, return_periods = config.R
 
   return thresholds_cp, parameters_cp
 
+#### Main function to calculate return period values for a given dataset using either empirical or L-moments fitting. Returns both the return period thresholds and the GEV parameters for each bootstrap iteration. ###
 def calc_rp_values(data, 
                    type = 'lmom',
                    return_periods = config.RETURN_PERIODS,
@@ -390,7 +597,7 @@ def lmoments_county(xarray_data, n_b = 100, thin = 'centroid', lmom_fit = True):
 
   return r, gev_params
 
-### Alternative to lmoments_county that applies GEV fitting and return period calculation directly to the data without calculating L-moments first. This is faster but less robust, and may fail for some grid cells with insufficient data or extreme values. Use with caution. ###
+### Alternative to lmoments_county that applies GEV fitting and return period calculation directly to the data without calculating L-moments first. This is faster but less robust, and may fail for some grid cells with insufficient data or extreme values ###
 def process_rp_values(data, n_b, dims_stack = []):
   data = data.compute()
   input_data = input_data_byCounty(data)
@@ -410,239 +617,12 @@ def process_rp_values(data, n_b, dims_stack = []):
 
   return r, gev_paras_log
 
-### Main function to calculate adjustment factors and return period values for a given model, scenario, and time period ###
-def calc_adj_factors(model, scenario, subset_time, DIRECTORY, n_b = 100, s_var = 'pds_peak_values', regionalization = True):
-  period = f"{str(subset_time[0])}-{str(subset_time[1])}"
-
-  result_hist = xr.open_dataset(f'{DIRECTORY}/{model}.historical.{str(1950)}-{str(2000)}_processed.zarr', zarr_format=2, consolidated=False)
-  dims_stack = [d for d in result_hist.dims if d not in ['x', 'y', 'year']]
-  
-  if regionalization:
-    #r_hist, gev_paras_log_hist = lmoments_county(result_hist[s_var])
-    r_hist, gev_paras_log_hist = calc_adj_factors_centroid(result_hist, s_var, n_b = n_b)
-  else:
-    r_hist, gev_paras_log_hist = process_rp_values(result_hist[s_var], dims_stack = dims_stack)
-
-
-  result = xr.open_dataset(f'{DIRECTORY}/{model}.{scenario}.{str(subset_time[0])}-{str(subset_time[1])}_processed.zarr', zarr_format=2, consolidated=False)
-  dims_stack = [d for d in result.dims if d not in ['x', 'y', 'year']]
-  if regionalization:
-    r_mod, gev_paras_log_mod = calc_adj_factors_centroid(result, s_var, n_b = n_b)
-  else:
-    r_mod, gev_paras_log_mod = process_rp_values(result[s_var], dims_stack = dims_stack)
-
-  r = r_mod/r_hist
-
-  r = r.expand_dims({'model': [model], 'scenario': [scenario], 'time_period' : [period]})
-  r_mod = r_mod.expand_dims({'model': [model], 'scenario': [scenario], 'time_period' : [period]})
-  gev_mod = gev_paras_log_mod.expand_dims({'model': [model], 'scenario': [scenario], 'time_period' : [period]})
-
-  r.name = 'adj_factor'
-  r_mod.name = 'return_precip'
-  gev_mod.name = 'GEV_parameters'
-  return r, r_mod, gev_mod
 
 
 
 
-def calc_adj_factors_centroid(ds, var_name, n_b, lat_dim='lat', lon_dim='lon', fit_type = 'regional_lmom'):
-    from pathlib import Path
-    import lmoments3 as lm
-    from lmoments3 import distr
-    import regionmask
-    import geopandas as gpd
 
-    def county_centroid_gdf():
-      #Load Counties
-      gdf_counties = data_io.load_counties()
-      #Calculate centroids
 
-      gdf_projected = gdf_counties.to_crs("EPSG:5070")  # Project to a metric CRS for accurate distance calculations
-      centroids = gdf_projected.geometry.centroid  # GeoSeries in EPSG:5070
-      gdf_counties['centroid'] = gpd.GeoSeries(centroids, crs="EPSG:5070").to_crs("EPSG:4326")
-
-      return gdf_counties
-
-    def gdf_xarray(gdf):
-
-      county_ids = gdf.index.astype(str) 
-      centroids = gdf['centroid']
-      ds = xr.Dataset(
-          coords={
-              "county": county_ids,
-              "lat": ("county", centroids.y.values),
-              "lon": ("county", centroids.x.values),
-          }
-      )
-
-      # Attach geometry as a non-index coordinate for reference
-      ds = ds.assign_coords(geometry=("county", gdf.geometry.values))
-      return ds
-
-    def fit_gev_shape_scale(data):
-      try:
-          fit_paras = distr.gev.lmom_fit(data)
-          shape = -fit_paras['c']
-          scale = fit_paras['scale']
-      except:
-          shape = np.nan
-          scale = np.nan
-      return shape, scale
-    
-    def safe_lmom(x):
-      x_valid = x[np.isfinite(x)]
-      try:
-          return np.array(lm.lmom_ratios(x_valid, nmom=4))
-      except Exception:
-          return np.full(4, np.nan)
-                    
-    def extract_7x7(da_gridded, lons, lats):
-      half = 3
-      windows = []
-      
-      for county_id, lon, lat in zip(ds_county['county'].values, lons, lats):
-          i_lat = np.abs(da_gridded.y - lat).argmin().item()
-          i_lon = np.abs(da_gridded.x - lon).argmin().item()
-          
-          y_start = max(0, i_lat - half)
-          y_stop  = min(da_gridded.sizes['y'], i_lat + half + 1)
-          x_start = max(0, i_lon - half)
-          x_stop  = min(da_gridded.sizes['x'], i_lon + half + 1)
-          
-          window = da_gridded.isel(
-              y=slice(y_start, y_stop),
-              x=slice(x_start, x_stop),
-          )
-          window = window.pad(
-              y=(max(0, half - i_lat), max(0, (i_lat + half + 1) - da_gridded.sizes['y'])),
-              x=(max(0, half - i_lon), max(0, (i_lon + half + 1) - da_gridded.sizes['x'])),
-              mode='constant', constant_values=np.nan
-          )
-          if 'ensemble' in da_gridded.dims:
-              window = window.transpose('ensemble', 'peak', 'y', 'x')  # ensure correct order
-          else:
-              window = window.transpose('peak', 'y', 'x')  # ensure correct order
-          values = window.values                                     # (ensemble, peak, 7, 7)
-          values_flat = values.reshape(*values.shape[:-2], -1)      # (ensemble, peak, 49)
-          windows.append(values_flat)
-      
-      if 'ensemble' in da_gridded.dims:
-        return xr.DataArray(
-          np.stack(windows, axis=0),
-          dims=['county', 'ensemble', 'peak', 'cell'],
-          coords={'county': ds_county['county'].values}
-      )
-      else:
-        return xr.DataArray(
-          np.stack(windows, axis=0),
-          dims=['county', 'peak', 'cell'],
-          coords={'county': ds_county['county'].values}
-      )
-    def fit_gev_grid(lmoms_4d):
-      """
-      Fit GEV to each cell in a 5x5 grid from pre-computed L-moments.
-      lmoms_4d: (4, 5, 5) where dim 0 is [L1, L2, t3, t4]
-      returns: c, loc, scale each (5, 5)
-      """
-      ny, nx = lmoms_4d.shape[1], lmoms_4d.shape[2]
-      c_out     = np.full((ny, nx), np.nan)
-      loc_out   = np.full((ny, nx), np.nan)
-      scale_out = np.full((ny, nx), np.nan)
-
-      for i in range(ny):
-          for j in range(nx):
-              lmoms = lmoms_4d[:, i, j]
-              if not np.isfinite(lmoms).all():
-                  continue
-              try:
-                  paras = distr.gev.lmom_fit(lmom_ratios=lmoms.tolist())
-                  c_out[i, j]     = paras['c']
-                  loc_out[i, j]   = paras['loc']
-                  scale_out[i, j] = paras['scale']
-              except:
-                  pass
-
-      return c_out, loc_out, scale_out
-
-    def ds_5x5_lmom(data, n_b=100):
-      # data.shape == (ensemble, peak, 49)
-      
-      # Flatten ensemble and peak into single time axis
-      data = data.reshape(-1, data.shape[-1])  # (ensemble*peak, 49)
-      data_2d = data.reshape(data.shape[0], 7, 7)  # (time, 7, 7)
-
-      all_r, all_params = [], []
-      #For each cell in a 3x3 (for smoothing at the end)
-      for i in range(2, 5):
-          for j in range(2, 5):
-              focal_cell = data_2d[:, i, j]               # (time,)
-              pool = data_2d[:, i-2:i+3, j-2:j+3]        # (time, 5, 5)
-
-              if fit_type == "regional_lmom":
-                pool = data_2d[:, i-2:i+3, j-2:j+3]             # (time, 5, 5)
-                data_flat = pool.reshape(pool.shape[0], -1)       # (time, 25)
-
-                lmoms = np.apply_along_axis(safe_lmom, axis=0, arr=data_flat)  # (4, 25)
-
-                lmoms[0] = lmoms[0][np.isnan(lmoms[0])] = np.nanmean(lmoms[0])
-                lmoms[1] = lmoms[1][np.isnan(lmoms[1])] = np.nanmean(lmoms[1])
-                #Smooth higher order moments
-                lmoms[2] = np.ones(lmoms[2].shape)*np.nanmean(lmoms[2])
-                lmoms[3] = np.ones(lmoms[3].shape)*np.nanmean(lmoms[3])
-
-                lmoms_4d = lmoms.reshape(4, 5, 5)
-                shape_grid, loc_grid, scale_grid = fit_gev_grid(lmoms_4d)
-
-              elif fit_type == "regional_stack":
-                pool = pool.reshape(-1)       # (time, 25)
-                valid = np.isfinite(pool)       # (25,)
-                pool = pool[valid]                        # (time, n_valid)
-                shape, scale = fit_gev_shape_scale(pool)     
-              
-              fit_paras_base = {'c': shape_grid[2,2], 'loc': loc_grid[2,2], 'scale': scale_grid[2,2]}
-              r, gev_params = bootstrap_gev(n_b, fit_paras_base, num_years=50)
-              all_r.append(np.asarray(r))
-              all_params.append(np.asarray(gev_params))
-      r_out = np.stack(all_r, axis=0)        # (9, n_b+1, n_return_periods)
-      p_out = np.stack(all_params, axis=0)   # (9, n_b+1, 3)
-      return r_out, p_out
-    
-    centroids_gdf = county_centroid_gdf()
-    ds_county = gdf_xarray(county_centroid_gdf())
-        
-    da_gridded = ds[var_name] if isinstance(ds, xr.Dataset) else ds
-
-    da_pooled = extract_7x7(da_gridded, ds_county['lon'].values, ds_county['lat'].values)
-
-    if 'ensemble' in da_pooled.dims:
-      in_dims = ['ensemble', 'peak', 'cell']
-    else:
-      in_dims = ['peak', 'cell']
-
-    r, gev_params = xr.apply_ufunc(
-      ds_5x5_lmom,
-      da_pooled,
-      kwargs={"n_b": n_b},
-      input_core_dims=[in_dims],
-      output_core_dims=[['centroid_cell', 'n_b', 'return_periods'], 
-                        ['centroid_cell', 'n_b', 'GEV_paras']],
-      output_dtypes=[np.float64, np.float64],
-      vectorize=True,
-      dask="parallelized",
-      dask_gufunc_kwargs={'output_sizes': {
-          'return_periods': 6, 
-          'n_b': n_b+1, 
-          'GEV_paras': 3,
-          'centroid_cell': 9
-      }}
-      )
-
-      
-
-    gev_params = gev_params.assign_coords(GEV_paras = ['shape', 'loc', 'scale']) 
-    r = r.assign_coords(return_periods = [2, 5, 10, 25, 50, 100]) 
-
-    return r, gev_params
 
 
 
