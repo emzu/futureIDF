@@ -259,7 +259,7 @@ def process_precipitation_timeseries(
         Number of highest peaks to extract for PDS per grid cell
         If None, uses number of years in dataset (default behavior)
     min_separation_days : int
-        Minimum days between PDS peaks (default: 3)
+        Minimum days between PDS peaks (default: 7)
     time_dim : str
         Name of time dimension
     compute_pds : bool
@@ -274,16 +274,6 @@ def process_precipitation_timeseries(
         - 'pds_peak_values': Peak precipitation values (if compute_pds=True)
         - 'pds_min_peak': Minimum peak value at each grid cell (if compute_pds=True)
         
-    Examples
-    --------
-    >>> # Process full dataset (n_peaks = n_years automatically)
-    >>> result = process_precipitation_timeseries(daily_precip)
-    >>> print(result)
-    >>> 
-    >>> # Access results
-    >>> ams = result['ams']
-    >>> totals = result['annual_total']
-    >>> pds_peaks = result['pds_peak_values']  # Shape: (n_peaks, y, x)
     """
     print("Processing precipitation time series...")
     

@@ -1,0 +1,12 @@
+{
+  "units": "inches/day",
+  "history": " pierce 2024-09-24 08:53:40.177948 /net/mead24/data/LOCA2_CONUS_regional/nc_region_split_driver run on file /net/valve22/data/LOCA2_CONUS/TaiESM1/0p0625deg/r1i1p1f1/historical/pr/pr.TaiESM1.historical.r1i1p1f1.1950-2014.LOCA_16thdeg_v20240915.nc",
+  "region:": "n_east",
+  "description": "Annual Maximum Series - maximum daily precipitation per year",
+  "coordinates": "spatial_ref",
+  "_ARRAY_DIMENSIONS": [
+    "year",
+    "y",
+    "x"
+  ]
+}

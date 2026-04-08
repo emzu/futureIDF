@@ -1,0 +1,13 @@
+{
+  "units": "inches/day",
+  "history": " pierce 2024-09-24 16:21:05.727872 /net/mead24/data/LOCA2_CONUS_regional/nc_region_split_driver run on file /net/valve22/data/LOCA2_CONUS/ACCESS-CM2/0p0625deg/r1i1p1f1/historical/pr/pr.ACCESS-CM2.historical.r1i1p1f1.1950-2014.LOCA_16thdeg_v20240915.nc",
+  "region:": "n_east",
+  "description": "Annual precipitation totals",
+  "coordinates": "spatial_ref",
+  "_ARRAY_DIMENSIONS": [
+    "ensemble",
+    "year",
+    "y",
+    "x"
+  ]
+}

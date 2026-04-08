@@ -331,6 +331,18 @@ def load_counties(crs = None):
   
   return gdf_counties
 
+def clip_domain(da, ver):
+  if ver == 'CMIP6':
+    da = da.assign_coords(lon=da.lon - 360) #Only for CMIP6
+  da = da.rename({"lat": "y", "lon": "x"})
+  da = da.rio.write_crs("EPSG:4326")
+
+  counties = gpd.read_file('/content/Adj_IDF/data/Boundaries/MARISA_domain.shp')
+  counties = counties.to_crs(da.rio.crs)
+
+  clipped = da.rio.clip(counties.geometry, counties.crs)
+  return clipped
+
 def combine_models(ver, suffix, FINAL_DIR = "/content/drive/MyDrive/Research/MARISA_IDF/data/FINAL" , zarr_vars = None, save_vars = None ):
     """
     Combine processed Zarr files across models and scenarios into a single dataset

@@ -1,0 +1,12 @@
+{
+  "units": "inches/day",
+  "history": " pierce 2024-09-24 11:24:18.868513 /net/mead24/data/LOCA2_CONUS_regional/nc_region_split_driver run on file /net/valve22/data/LOCA2_CONUS/ACCESS-ESM1-5/0p0625deg/r1i1p1f1/ssp245/pr/pr.ACCESS-ESM1-5.ssp245.r1i1p1f1.2015-2044.LOCA_16thdeg_v20240915.nc",
+  "region:": "n_east",
+  "description": "Minimum peak value selected (effective threshold)",
+  "coordinates": "spatial_ref",
+  "_ARRAY_DIMENSIONS": [
+    "ensemble",
+    "y",
+    "x"
+  ]
+}
