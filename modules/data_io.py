@@ -14,7 +14,7 @@ from typing import List, Optional, Union
 from .config import MODELS_LOCA2, MODELS_LOCA, MM_TO_INCHES, SECONDS_PER_DAY
 from modules import config
 
-
+########## ATLAS 14 ##########
 def get_atlas14(gdf: gpd.GeoDataFrame, dur: str = '24-hr', out_dir: str = None) -> pd.DataFrame:
     """
     Download NOAA Atlas 14 24-hr precipitation frequency estimates for each
@@ -109,6 +109,46 @@ def get_atlas14(gdf: gpd.GeoDataFrame, dur: str = '24-hr', out_dir: str = None) 
     )
 
     return result
+
+########## NOAA CO-OP STATION DATA ##########
+def get_obsData(coop_station, in_directory = "/content/drive/MyDrive/Research/MARISA_IDF/data/"):
+  import requests
+  from io import StringIO
+
+  stID = coop_station['StnID']
+  coop_obs = f'https://www.ncei.noaa.gov/data/coop-hourly-precipitation/v2/access/{stID}.csv'
+  filename = f'{in_directory}/{stID}.csv'
+  if os.path.exists(filename):
+    return pd.read_csv(filename)
+  else:
+    pass
+  response = requests.get(coop_obs)
+  csv_data = StringIO(response.text)
+  obs_csv = pd.read_csv(csv_data)
+  observations = obs_csv[['DATE', 'DlySum']]
+  observations['DlySum'] = observations['DlySum']/100 # Conver from hundredths of in to in
+  observations.rename(columns={'DlySum': 'PRCP'}, inplace=True)
+  observations.to_csv(filename, index=False)
+  return observations
+
+def check_obs(coop_station, out_directory = "/content/drive/MyDrive/Research/MARISA_IDF/data/"):
+#For each station, get load daily precipitation data
+  stID = coop_station['StnID']
+  filename = f'{out_directory}/{stID}.csv'
+  if os.path.exists(filename):
+    return
+  else:
+    get_obsData(coop_station, in_directory=out_directory)
+
+  obs_csv = pd.read_csv(filename)
+  if 'PRCP' in obs_csv.columns:
+    return
+  else:
+    observations = obs_csv[['DATE', 'DlySum']]
+    observations['DlySum'] = observations['DlySum']/100 # Conver from hundredths of in to in
+    observations.rename(columns={'DlySum': 'PRCP'}, inplace=True)
+    observations.to_csv(filename, index=False)
+  return
 
 def load_loca_precipitation(
     ds: xr.Dataset,
@@ -343,7 +383,12 @@ def clip_domain(da, ver):
   clipped = da.rio.clip(counties.geometry, counties.crs)
   return clipped
 
-def combine_models(ver, suffix, FINAL_DIR = "/content/drive/MyDrive/Research/MARISA_IDF/data/FINAL" , zarr_vars = None, save_vars = None ):
+def combine_models(ver, suffix, FINAL_DIR = "/content/drive/MyDrive/Research/MARISA_IDF/data/FINAL" , 
+                   DIRECTORY_LOCA2 = "/content/drive/MyDrive/Research/MARISA_IDF/data/LOCA2/MARISA/",
+                   SAVE_DIR_LOCA2 = "/content/drive/MyDrive/Research/MARISA_IDF/data/FINAL/LOCA2/Processed",
+                   DIRECTORY_LOCA = "/content/drive/MyDrive/Research/MARISA_IDF/data/LOCA/",
+                   SAVE_DIR_LOCA = "/content/drive/MyDrive/Research/MARISA_IDF/data/FINAL/LOCA",
+                   zarr_vars = None, save_vars = None ):
     """
     Combine processed Zarr files across models and scenarios into a single dataset
     """
@@ -351,15 +396,14 @@ def combine_models(ver, suffix, FINAL_DIR = "/content/drive/MyDrive/Research/MAR
     import os
     time_periods = ['1950-2014', '2020-2070', '2050-2100']
     if ver == 'LOCA2':
-        DIRECTORY = "/content/drive/MyDrive/Research/MARISA_IDF/data/LOCA2/MARISA/"
-        SAVE_DIR = "/content/drive/MyDrive/Research/MARISA_IDF/data/FINAL/LOCA2/Processed"
-        #scenarios = ['ssp245', 'ssp370', 'ssp585']
-        scenarios = ['ssp245']
+        DIRECTORY = DIRECTORY_LOCA2
+        SAVE_DIR = SAVE_DIR_LOCA2
+        scenarios = config.SCENARIOS['LOCA2']
         models = config.MODELS_LOCA2
     elif ver == 'LOCA':
-        DIRECTORY = "/content/drive/MyDrive/Research/MARISA_IDF/data/LOCA/"
-        SAVE_DIR = "/content/drive/MyDrive/Research/MARISA_IDF/data/FINAL/LOCA"
-        scenarios = ['rcp45', 'rcp85']
+        DIRECTORY = DIRECTORY_LOCA
+        SAVE_DIR = SAVE_DIR_LOCA
+        scenarios = config.SCENARIOS['LOCA']
         models = config.MODELS_LOCA
 
     #zarr_vars = ['adj_factor', 'return_precip', 'GEV_paras']

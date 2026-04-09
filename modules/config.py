@@ -25,10 +25,8 @@ MODELS_LOCA = [
 
 # Scenarios
 SCENARIOS = {
-    'historical': '1950-2014',
-    'ssp245': ['2020-2070', '2070-2100'],
-    'ssp370': ['2020-2070', '2070-2100'],
-    'ssp585': ['2020-2070', '2070-2100']
+    'LOCA': ['rcp45', 'rcp85'],
+    'LOCA2': ['ssp245', 'ssp370', 'ssp585']
 }
 
 # Unit conversions

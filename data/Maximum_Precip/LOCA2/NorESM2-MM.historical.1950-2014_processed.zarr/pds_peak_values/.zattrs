@@ -1,0 +1,13 @@
+{
+  "units": "inches/day",
+  "history": " pierce 2024-09-24 18:06:43.987244 /net/mead24/data/LOCA2_CONUS_regional/nc_region_split_driver run on file /net/valve22/data/LOCA2_CONUS/NorESM2-MM/0p0625deg/r1i1p1f1/historical/pr/pr.NorESM2-MM.historical.r1i1p1f1.1950-2014.LOCA_16thdeg_v20240915.nc",
+  "region:": "n_east",
+  "description": "Top 65 precipitation peaks at each grid cell",
+  "coordinates": "spatial_ref",
+  "_ARRAY_DIMENSIONS": [
+    "ensemble",
+    "y",
+    "x",
+    "peak"
+  ]
+}
