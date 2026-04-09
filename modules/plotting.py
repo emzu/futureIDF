@@ -25,7 +25,7 @@ def future_idf_curve(LOCA, LOCA2, atlas14_counties, scenario = ['rcp45','ssp245'
 
     frequencies = config.RETURN_PERIODS
     a14_county = atlas14_counties[atlas14_counties['county_name']=='Allegheny'][['2', '5', '10', '25', '50', '100']]
-    
+
     ds_zarr_LOCA = LOCA.sel(scenario = scenario, time_period = time_period).sel(county = '178').mean('centroid_cell')['adj_factor']
     ds_zarr_LOCA2 = LOCA2.sel(scenario = scenario, time_period = time_period).sel(county = '178').mean('centroid_cell')['adj_factor']
 
@@ -41,7 +41,7 @@ def future_idf_curve(LOCA, LOCA2, atlas14_counties, scenario = ['rcp45','ssp245'
     p50b = [np.nanpercentile(data_loca2[f], 50) for f in frequencies]
     p90b = [np.nanpercentile(data_loca2[f], 90) for f in frequencies]
 
-    a14 = [a14_allegheny[str(f)].values for f in frequencies]
+    a14 = [a14_county[str(f)].values for f in frequencies]
 
     plt.rcParams.update(config.PLT_STYLE)
 
