@@ -1,6 +1,4 @@
 # futureIDF
-Code framework to rapidly generate future IDF curves from downscaled GCM precipitation
-
 An open-source Python framework to rabidly generate future IDF curves from downscaled climate model outputs to support climate-resilient stormwater infrastructure design. Future IDF curves quantify projected changes in extreme precipitation through multiplicative change factors derived from climate projections applied to observed precipitation data through quantile delta mapping. This framework supports ensemble analysis of both LOCA-downscaled CMIP5 and LOCA2-downscaled CMIP6 projections, enabling direct comparison of climate model generations and derived change factors. It can be easily updated with additional downscaled data (STAR-ESDM, NA-Cordex) or future CMIP generations (CMIP7)
  
 The framework was developed for the Mid-Atlantic region as part of updates to the [MARISA IDF Curve Tool](https://midatlantic-idf.rcc-acis.org/), but is designed to be adaptable to other regions with access to gridded downscaled precipitation data.
