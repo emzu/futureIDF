@@ -150,6 +150,28 @@ def check_obs(coop_station, out_directory = "/content/drive/MyDrive/Research/MAR
     observations.to_csv(filename, index=False)
   return
 
+def get_station_ppf(coop_stationinv_cbp, data_directory = "/content/drive/MyDrive/Research/MARISA_IDF/data/"):
+  from scipy.stats import genextreme
+
+  ppf = []
+  for idx, row in coop_stationinv_cbp.iterrows():
+    stID = row['StnID']
+    try:
+      obs_csv = pd.read_csv(f'{data_directory}/{stID}.csv')
+      observations = obs_csv[['DATE', 'PRCP']]
+      c, loc, scale = genextreme.fit(observations['PRCP'].values)
+
+      return_periods = config.RETURN_PERIODS
+      probs = [1 - 1/T for T in return_periods]
+
+      ppf_values = genextreme.ppf(probs, c, loc=loc, scale=scale)
+      ppf.append(ppf_values)
+    except:
+      ppf.append(np.full(6, np.nan))
+  return ppf
+
+########### LOCA/LOCA2 MODEL DATA ###########
+
 def load_loca_precipitation(
     ds: xr.Dataset,
     convert_to_inches: bool = True,
