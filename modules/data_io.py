@@ -109,6 +109,26 @@ def get_atlas14(gdf: gpd.GeoDataFrame, dur: str = '24-hr', out_dir: str = None) 
     )
 
     return result
+def a14_county_gdf(a14_df: pd.DataFrame, a14_PATH: str = "/content/drive/MyDrive/Research/MARISA_IDF/data/Atlas14/atlas14_24hr_data.parquet") -> gpd.GeoDataFrame:
+    if a14_df is None:
+        try:
+            a14_df = pd.read_parquet(a14_PATH)
+        except Exception as e:
+            print(f"Error loading Atlas 14 data from {a14_PATH}: {e}")
+            return None
+    
+    counties = load_counties()
+
+    atlas14 = a14_df.reset_index().copy()
+    a14_points = gpd.GeoDataFrame(
+        atlas14,
+        geometry=gpd.points_from_xy(atlas14['lon'], atlas14['lat']),
+        crs='EPSG:4326'  # WGS84 lat/lon
+    ).to_crs('EPSG:3857')
+
+    atlas14_counties = gpd.sjoin(a14_points, counties, how = 'left', predicate = 'within')
+
+    return atlas14_counties
 
 ########## NOAA CO-OP STATION DATA ##########
 def get_obsData(coop_station, in_directory = "/content/drive/MyDrive/Research/MARISA_IDF/data/"):

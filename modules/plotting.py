@@ -14,7 +14,113 @@ import geopandas as gpd
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from typing import Optional, Union, Tuple, List
+from modules import config
+from .config import C_LOCA, C_LOCA2, PLT_STYLE
 
+
+########## Future IDF Curve ##########
+
+def future_idf_curve(LOCA, LOCA2, atlas14_counties, scenario = ['rcp45','ssp245'], time_period = '2050-2100', duration=None, ax=None, label=None, **kwargs):
+    from scipy.stats import gaussian_kde
+
+    frequencies = config.RETURN_PERIODS
+    a14_county = atlas14_counties[atlas14_counties['county_name']=='Allegheny'][['2', '5', '10', '25', '50', '100']]
+    
+    ds_zarr_LOCA = LOCA.sel(scenario = scenario, time_period = time_period).sel(county = '178').mean('centroid_cell')['adj_factor']
+    ds_zarr_LOCA2 = LOCA2.sel(scenario = scenario, time_period = time_period).sel(county = '178').mean('centroid_cell')['adj_factor']
+
+    data_loca = {f: a14_county[str(f)].values*ds_zarr_LOCA.sel(return_periods=f).values.flatten() for f in frequencies}
+    data_loca2 = {f: a14_county[str(f)].values*ds_zarr_LOCA2.sel(return_periods=f).values.flatten() for f in frequencies}
+
+    # Compute percentiles
+    p10a = [np.nanpercentile(data_loca[f], 10) for f in frequencies]
+    p50a = [np.nanpercentile(data_loca[f], 50) for f in frequencies]
+    p90a = [np.nanpercentile(data_loca[f], 90) for f in frequencies]
+
+    p10b = [np.nanpercentile(data_loca2[f], 10) for f in frequencies]
+    p50b = [np.nanpercentile(data_loca2[f], 50) for f in frequencies]
+    p90b = [np.nanpercentile(data_loca2[f], 90) for f in frequencies]
+
+    a14 = [a14_allegheny[str(f)].values for f in frequencies]
+
+    plt.rcParams.update(config.PLT_STYLE)
+
+    # Main axis for frequency vs value
+    fig, ax = plt.subplots(figsize=(6.5,3))
+    hist_width = .8  # fixed width for all histograms
+    bin_width = 0.5
+    bins = np.arange(0, 20 + bin_width, bin_width)
+
+    #ax = axs[0]
+    x_vals = np.array([2, 5, 10, 25, 50, 100])
+    positions = np.arange(len(x_vals))
+
+    for f in frequencies:
+        x_pos = positions[frequencies.tolist().index(f)]
+        vals = data_loca2[f]
+        vals = vals[~np.isnan(vals)]
+
+        # KDE for violin shape
+
+        kde = gaussian_kde(vals, bw_method='scott')
+        y_range = np.linspace(vals.min(), vals.max(), 200)
+        kde_vals = kde(y_range)
+
+        # Normalize and scale by width
+        kde_scaled = kde_vals / kde_vals.max() * hist_width
+
+        ax.fill_betweenx(y_range, x_pos, x_pos + kde_scaled / 2,
+                        facecolor=(config.C_LOCA2, 0.4), edgecolor=(0, 0, 0, 1.0), linewidth=1)
+
+        p10, p50, p90 = np.percentile(vals, [10, 50, 90])
+
+        for p, ls in zip([p10, p50, p90], ['--', '-', '--']):
+            hw = np.interp(p, y_range, kde_scaled) / 2
+            ax.hlines(p, x_pos, x_pos + hw, color=config.C_LOCA2, linewidth=1.5, linestyle=ls)
+
+    for f in frequencies:
+        x_pos = positions[frequencies.tolist().index(f)]
+        vals = data_loca[f]
+        vals = vals[~np.isnan(vals)]
+
+        # KDE for violin shape
+        from scipy.stats import gaussian_kde
+        kde = gaussian_kde(vals, bw_method='scott')
+        y_range = np.linspace(vals.min(), vals.max(), 200)
+        kde_vals = kde(y_range)
+
+        # Normalize and scale by width
+        kde_scaled = kde_vals / kde_vals.max() * hist_width
+
+        # Draw filled violin (right half only, mirroring your original style)
+        ax.fill_betweenx(y_range, x_pos - kde_scaled / 2, x_pos,
+                        facecolor=(C_LOCA, 0.4), edgecolor=(0, 0, 0, 1.0), linewidth=1)
+        p10, p50, p90 = np.percentile(vals, [10, 50, 90])
+
+        for p, ls in zip([p10, p50, p90], ['--', '-', '--']):
+            hw = np.interp(p, y_range, kde_scaled) / 2
+            ax.hlines(p, x_pos, x_pos - hw, color=C_LOCA, linewidth=1.5, linestyle=ls)
+
+    # Plot percentile curves on frequency axis
+    ax.plot(positions, p50a, 'o', color=C_LOCA, label="LOCA (CMIP5)")
+    #ax.plot(frequencies, p10, 'o', color='orange', label="_nolegend_")
+    #ax.plot(frequencies, p90, 'o', color='orange', label="_nolegend_")
+
+    ax.plot(positions, p50b, 'o', color=C_LOCA2,  label="LOCA2 (CMIP6)")
+    #ax.plot(frequencies, p10b, 'o--', color='purple',  label="_nolegend_")
+    #ax.plot(frequencies, p90b, 'o--', color='purple',  label="_nolegend_")
+
+    ax.plot(positions, a14, 'o-', color='black', label="Atlas 14")
+
+    # Label axes
+    ax.set_xlabel("Return Period (yrs)")
+    ax.set_ylabel("24-hr Depth (in)")
+    ax.legend(loc="upper left", frameon = False)
+    ax.set_ylim([0,10])
+    plt.xlim([-1,6])
+    plt.xticks(positions, x_vals)
+
+    return fig, ax
 
 def quick_plot(
     gdf: gpd.GeoDataFrame,

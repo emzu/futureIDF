@@ -49,3 +49,31 @@ FIGURE_FORMAT = 'png'
 # Color palettes
 CMAP_DIVERGING = 'RdYlBu_r'
 CMAP_SEQUENTIAL = 'viridis'
+
+# Plotting
+C_LOCA   = "#2166ac"
+C_LOCA2  = "#d6604d"
+
+PLT_STYLE = {
+    "font.family":       "serif",
+    "font.serif":        ["Times New Roman", "DejaVu Serif"],
+    "font.size":         8,
+    "axes.labelsize":    8,
+    "axes.titlesize":    9,
+    "xtick.labelsize":   7,
+    "ytick.labelsize":   7,
+    "legend.fontsize":   7,
+    "axes.linewidth":    0.6,
+    "xtick.major.width": 0.6,
+    "ytick.major.width": 0.6,
+    "xtick.minor.width": 0.4,
+    "ytick.minor.width": 0.4,
+    "xtick.direction":   "out",
+    "ytick.direction":   "out",
+    "xtick.major.size":  3,
+    "ytick.major.size":  3,
+    "axes.spines.top":   False,
+    "axes.spines.right": False,
+    "pdf.fonttype":      42,
+    "ps.fonttype":       42,
+}
