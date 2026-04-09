@@ -20,7 +20,6 @@ This framework is designed to work with:
 - **LOCA2 (CMIP6):**  Daily precipitation at 6-km statistically downscaled from CMIP6. Available from [the LOCA2 data portal](https://cirrus.ucsd.edu/~pierce/LOCA2/CONUS_regions_split).
 - **NOAA CO-OP Station Network:** [NCEI COOP Hourly Precip](https://www.ncei.noaa.gov/data/coop-hourly-precipitation/v2/access/)
 - **NOAA Atlas 14:** Historical observed precipitation frequency estimates used as the baseline for change factor normalization. Available from [NOAA's Precipitation Frequency Data Server](https://hdsc.nws.noaa.gov/pfds/).
-- **County shapefiles:** Used as spatial pooling regions. Available from the [U.S. Census Bureau TIGER/Line files](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html).
  
 `0)Download_Data.ipynb` provides utilities for downloading and organizing LOCA/LOCA2, Atlas 14, and Station data programmatically.
  
