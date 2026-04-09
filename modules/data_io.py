@@ -474,3 +474,11 @@ def combine_models(ver, suffix, FINAL_DIR = "/content/drive/MyDrive/Research/MAR
         temp.to_zarr(f'{FINAL_DIR}/baseline_data_combined_{ver}_{scenario}_{suffix}.zarr', zarr_format=2, consolidated = False, mode='w')
         print(f"Saved combined dataset for {scenario} to {FINAL_DIR}/baseline_data_combined_{ver}_{scenario}_{suffix}.zarr")
     return True
+
+def clean_values(data):
+  x_vals = np.array([2, 5, 10, 25, 50, 100])
+  arr = np.array(data)
+  arr[np.isinf(arr)] = np.nan
+  arr[arr<.001] = np.nan
+  arr = 1/arr
+  return pd.DataFrame(arr.T, columns = x_vals)
