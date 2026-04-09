@@ -43,8 +43,8 @@ def future_idf_curve(LOCA, LOCA2, atlas14_counties, county_name, scenario = ['rc
     ds_zarr_LOCA = LOCA.sel(scenario = scenario[0], time_period = time_period).sel(county = str(county_idx)).mean('centroid_cell')['adj_factor']
     ds_zarr_LOCA2 = LOCA2.sel(scenario = scenario[1], time_period = time_period).sel(county = str(county_idx)).mean('centroid_cell')['adj_factor']
 
-    data_loca = {f: a14_county[str(f)].values*ds_zarr_LOCA.sel(return_periods=f).values.flatten() for f in frequencies}
-    data_loca2 = {f: a14_county[str(f)].values*ds_zarr_LOCA2.sel(return_periods=f).values.flatten() for f in frequencies}
+    data_loca = {f: a14_county[str(f)]*ds_zarr_LOCA.sel(return_periods=f).values.flatten() for f in frequencies}
+    data_loca2 = {f: a14_county[str(f)]*ds_zarr_LOCA2.sel(return_periods=f).values.flatten() for f in frequencies}
 
     # Compute percentiles
     p10a = [np.nanpercentile(data_loca[f], 10) for f in frequencies]
