@@ -55,7 +55,7 @@ def future_idf_curve(LOCA, LOCA2, atlas14_counties, county_name, scenario = ['rc
     p50b = [np.nanpercentile(data_loca2[f], 50) for f in frequencies]
     p90b = [np.nanpercentile(data_loca2[f], 90) for f in frequencies]
 
-    a14 = [a14_county[str(f)].values for f in frequencies]
+    a14 = [a14_county[str(f)] for f in frequencies]
 
     plt.rcParams.update(config.PLT_STYLE)
 
