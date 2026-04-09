@@ -124,7 +124,7 @@ def a14_county_gdf(a14_df: pd.DataFrame = None, a14_PATH: str = "/content/drive/
         atlas14,
         geometry=gpd.points_from_xy(atlas14['lon'], atlas14['lat']),
         crs='EPSG:4326'  # WGS84 lat/lon
-    ).to_crs('EPSG:3857')
+    )
 
     atlas14_counties = gpd.sjoin(a14_points, counties, how = 'left', predicate = 'within')
 
