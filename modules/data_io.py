@@ -119,7 +119,7 @@ def a14_county_gdf(a14_df: pd.DataFrame = None, a14_PATH: str = "/content/drive/
     
     counties = load_counties()
 
-    atlas14 = a14_df.reset_index().copy()
+    atlas14 = a14_df
     a14_points = gpd.GeoDataFrame(
         atlas14,
         geometry=gpd.points_from_xy(atlas14['lon'], atlas14['lat']),
