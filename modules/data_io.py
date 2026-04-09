@@ -109,7 +109,7 @@ def get_atlas14(gdf: gpd.GeoDataFrame, dur: str = '24-hr', out_dir: str = None) 
     )
 
     return result
-def a14_county_gdf(a14_df: pd.DataFrame, a14_PATH: str = "/content/drive/MyDrive/Research/MARISA_IDF/data/Atlas14/atlas14_24hr_data.parquet") -> gpd.GeoDataFrame:
+def a14_county_gdf(a14_df: pd.DataFrame = None, a14_PATH: str = "/content/drive/MyDrive/Research/MARISA_IDF/data/Atlas14/atlas14_24hr_data.parquet") -> gpd.GeoDataFrame:
     if a14_df is None:
         try:
             a14_df = pd.read_parquet(a14_PATH)
