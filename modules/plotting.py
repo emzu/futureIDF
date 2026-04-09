@@ -70,7 +70,7 @@ def future_idf_curve(LOCA, LOCA2, atlas14_counties, county_name, scenario = ['rc
     positions = np.arange(len(x_vals))
 
     for f in frequencies:
-        x_pos = positions[frequencies.tolist().index(f)]
+        x_pos = positions[frequencies.index(f)]
         vals = data_loca2[f]
         vals = vals[~np.isnan(vals)]
 
@@ -93,7 +93,7 @@ def future_idf_curve(LOCA, LOCA2, atlas14_counties, county_name, scenario = ['rc
             ax.hlines(p, x_pos, x_pos + hw, color=config.C_LOCA2, linewidth=1.5, linestyle=ls)
 
     for f in frequencies:
-        x_pos = positions[frequencies.tolist().index(f)]
+        x_pos = positions[frequencies.index(f)]
         vals = data_loca[f]
         vals = vals[~np.isnan(vals)]
 
