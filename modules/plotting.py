@@ -20,14 +20,15 @@ from .config import C_LOCA, C_LOCA2, PLT_STYLE
 
 ########## Future IDF Curve ##########
 
-def future_idf_curve(LOCA, LOCA2, atlas14_counties, scenario = ['rcp45','ssp245'], time_period = '2050-2100', duration=None, ax=None, label=None, **kwargs):
+def future_idf_curve(LOCA, LOCA2, atlas14_counties, county_name, scenario = ['rcp45','ssp245'], time_period = '2050-2100', duration=None, ax=None, label=None, **kwargs):
     from scipy.stats import gaussian_kde
 
     frequencies = config.RETURN_PERIODS
-    a14_county = atlas14_counties[atlas14_counties['county_name']=='Allegheny'][['2', '5', '10', '25', '50', '100']]
+    county_idx = atlas14_counties[atlas14_counties['county_name']==county_name].index.values[0]
+    a14_county = atlas14_counties.iloc[county_idx][['2', '5', '10', '25', '50', '100']]
 
-    ds_zarr_LOCA = LOCA.sel(scenario = scenario, time_period = time_period).sel(county = '178').mean('centroid_cell')['adj_factor']
-    ds_zarr_LOCA2 = LOCA2.sel(scenario = scenario, time_period = time_period).sel(county = '178').mean('centroid_cell')['adj_factor']
+    ds_zarr_LOCA = LOCA.sel(scenario = scenario, time_period = time_period).sel(county = str(county_idx)).mean('centroid_cell')['adj_factor']
+    ds_zarr_LOCA2 = LOCA2.sel(scenario = scenario, time_period = time_period).sel(county = str(county_idx)).mean('centroid_cell')['adj_factor']
 
     data_loca = {f: a14_county[str(f)].values*ds_zarr_LOCA.sel(return_periods=f).values.flatten() for f in frequencies}
     data_loca2 = {f: a14_county[str(f)].values*ds_zarr_LOCA2.sel(return_periods=f).values.flatten() for f in frequencies}
