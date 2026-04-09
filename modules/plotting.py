@@ -20,7 +20,20 @@ from .config import C_LOCA, C_LOCA2, PLT_STYLE
 
 ########## Future IDF Curve ##########
 
-def future_idf_curve(LOCA, LOCA2, atlas14_counties, county_name, scenario = ['rcp45','ssp245'], time_period = '2050-2100', duration=None, ax=None, label=None, **kwargs):
+def future_idf_curve(LOCA, LOCA2, atlas14_counties, county_name, scenario = ['rcp45','ssp245'], time_period = '2050-2100', ax=None, label=None, **kwargs):
+    """
+    inputs:
+    LOCA, LOCA2: xarray datasets with dimensions (scenario, time_period, county, return_periods)
+    atlas14_counties: GeoDataFrame with county name and Atlas 14 values
+    county_name: Name of the county to plot
+    scenario: List of two scenarios to compare (default: ['rcp45', 'ssp245'])
+    time_period: Time period for the analysis (default: '2050-2100')
+    ax: Matplotlib axis to plot on (optional)
+
+    Returns:
+    Matplotlib figure and axis with the Future IDF curve plot
+
+    """
     from scipy.stats import gaussian_kde
 
     frequencies = config.RETURN_PERIODS
