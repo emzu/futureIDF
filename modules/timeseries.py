@@ -620,7 +620,7 @@ def process_inversion(zarr_adjFact, a14, design_depths):
             depths.append(depth)
             values.append(v_clean)
  
-    return pd.Series([v[0] for v in values], index=depths)
+    return pd.DataFrame(values, index=depths).T
  
  
 # ---------------------------------------------------------------------------
